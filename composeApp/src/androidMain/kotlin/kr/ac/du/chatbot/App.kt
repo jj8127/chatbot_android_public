@@ -157,7 +157,7 @@ fun App() {
                     )
                     Button(
                         onClick = ::sendMessage,
-                        enabled = !isLoading,
+                        enabled = !isLoading && message.isNotEmpty(),
                         modifier = Modifier.align(Alignment.CenterVertically)
                     ) {
                         Text("Submit")
