@@ -1,5 +1,14 @@
 package kr.ac.du.chatbot
 
+import android.app.Activity
+import android.content.Context
+import android.content.Intent
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import android.speech.tts.TextToSpeech
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -11,6 +20,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.donghoonyoo.langserve.LangServeClient
 import com.donghoonyoo.langserve.model.Message
@@ -19,25 +29,64 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.ui.tooling.preview.Preview
+import java.util.Locale
 
 val client = LangServeClient(
     https = false,
-    /**
-     * 10.0.2.2 is equivalent for localhost in Android Emulator.
-     * Reference: https://developer.android.com/studio/run/emulator-networking.html
-     */
     hostname = "10.0.2.2",
     port = 8000,
     path = "/chatbot",
 )
+var tts: TextToSpeech? = null
 
 @Composable
 @Preview
 fun App() {
     var isLoading by remember { mutableStateOf(false) }
-    var message by remember { mutableStateOf("") }  // 입력 텍스트 상태
-    val messageList = remember { mutableStateListOf<Message>() } // 메시지와 응답을 저장할 리스트
-    val listState = rememberLazyListState() // LazyListState를 기억
+    var message by remember { mutableStateOf("") }
+    val messageList = remember { mutableStateListOf<Message>() }
+    val listState = rememberLazyListState()
+
+    val context = LocalContext.current
+    val activity = context as? Activity
+
+    // TextToSpeech 초기화
+    tts = remember {
+        TextToSpeech(context) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                tts?.language = Locale.getDefault()
+            }
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            tts?.shutdown()  // 앱 종료 시 TextToSpeech 객체 해제
+        }
+    }
+
+    val speechRecognizerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult(),
+        onResult = { result ->
+            if (result.resultCode == Activity.RESULT_OK) {
+                val spokenText = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
+                if (!spokenText.isNullOrEmpty()) {
+                    message = spokenText
+                }
+            } else {
+                Toast.makeText(context, "음성 인식에 실패했습니다.", Toast.LENGTH_SHORT).show()
+            }
+        }
+    )
+
+    fun startVoiceInput() {
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "음성으로 메시지를 입력하세요.")
+        }
+        speechRecognizerLauncher.launch(intent)
+    }
 
     fun sendMessage() {
         CoroutineScope(Dispatchers.IO).launch {
@@ -65,30 +114,32 @@ fun App() {
                 messageList += responseMessage
             }
 
+            // AI 응답을 음성으로 출력
+            tts?.speak(responseMessage.content, TextToSpeech.QUEUE_FLUSH, null, null)
+
             isLoading = false
         }
     }
 
     MaterialTheme {
         Scaffold(
-            modifier = Modifier.imePadding() // 자판기가 나타날 때 화면을 밀어올림
+            modifier = Modifier.imePadding()
         ) { innerPadding ->
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
-                    .imePadding(), // 키보드가 화면을 밀어올리도록 추가
+                    .imePadding(),
                 verticalArrangement = Arrangement.Top,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // 저장된 문자열 리스트를 상단에 표시 (스크롤 가능하도록 LazyColumn 사용)
                 LazyColumn(
-                    state = listState, // LazyListState를 설정
+                    state = listState,
                     modifier = Modifier
                         .padding(16.dp)
                         .fillMaxWidth()
                         .weight(1f)
-                        .imePadding() // LazyColumn이 키보드에 의해 가려지지 않도록 설정
+                        .imePadding()
                 ) {
                     items(messageList) { message ->
                         Column(
@@ -99,7 +150,6 @@ fun App() {
                         ) {
                             when (message.speaker) {
                                 MessageSpeaker.Human -> {
-                                    // 사용자가 입력한 메시지 출력 (오른쪽 정렬)
                                     Box(
                                         modifier = Modifier
                                             .align(Alignment.End)
@@ -117,7 +167,6 @@ fun App() {
                                     }
                                 }
                                 MessageSpeaker.AI -> {
-                                    // 봇의 응답 출력 (왼쪽 정렬)
                                     Box(
                                         modifier = Modifier
                                             .align(Alignment.Start)
@@ -139,14 +188,19 @@ fun App() {
                     }
                 }
 
-                // 하단에 고정된 입력 창과 버튼 Row
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 12.dp, vertical = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    // 텍스트 입력창
+                    Button(
+                        onClick = { startVoiceInput() },
+                        modifier = Modifier.align(Alignment.CenterVertically)
+                    ) {
+                        Text("🎙️")
+                    }
+
                     TextField(
                         value = message,
                         onValueChange = { message = it },
@@ -164,7 +218,6 @@ fun App() {
                     }
                 }
 
-                // 새로운 메시지가 추가될 때마다 스크롤
                 LaunchedEffect(messageList.size) {
                     if (messageList.isNotEmpty()) {
                         listState.animateScrollToItem(messageList.size - 1)
