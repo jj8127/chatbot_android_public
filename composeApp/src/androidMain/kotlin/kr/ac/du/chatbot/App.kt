@@ -1,14 +1,13 @@
 package kr.ac.du.chatbot
 
 import android.app.Activity
-import android.content.Context
 import android.content.Intent
 import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -20,7 +19,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import com.donghoonyoo.langserve.LangServeClient
 import com.donghoonyoo.langserve.model.Message
@@ -28,19 +29,18 @@ import com.donghoonyoo.langserve.model.MessageSpeaker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import org.jetbrains.compose.ui.tooling.preview.Preview
 import java.util.Locale
 
 val client = LangServeClient(
-    https = false,
-    hostname = "10.0.2.2",
-    port = 8000,
-    path = "/chatbot",
+    https = true,
+    hostname = "ollama-endpoint-dsudc2.donghoon.net",
+    port = 443,
+    path = "eeve-korean-10b"
 )
+
 var tts: TextToSpeech? = null
 
 @Composable
-@Preview
 fun App() {
     var isLoading by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
@@ -48,9 +48,6 @@ fun App() {
     val listState = rememberLazyListState()
 
     val context = LocalContext.current
-    val activity = context as? Activity
-
-    // TextToSpeech 초기화
     tts = remember {
         TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) {
@@ -61,31 +58,8 @@ fun App() {
 
     DisposableEffect(Unit) {
         onDispose {
-            tts?.shutdown()  // 앱 종료 시 TextToSpeech 객체 해제
+            tts?.shutdown()
         }
-    }
-
-    val speechRecognizerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult(),
-        onResult = { result ->
-            if (result.resultCode == Activity.RESULT_OK) {
-                val spokenText = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
-                if (!spokenText.isNullOrEmpty()) {
-                    message = spokenText
-                }
-            } else {
-                Toast.makeText(context, "음성 인식에 실패했습니다.", Toast.LENGTH_SHORT).show()
-            }
-        }
-    )
-
-    fun startVoiceInput() {
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-            putExtra(RecognizerIntent.EXTRA_PROMPT, "음성으로 메시지를 입력하세요.")
-        }
-        speechRecognizerLauncher.launch(intent)
     }
 
     fun sendMessage() {
@@ -93,134 +67,155 @@ fun App() {
             if (isLoading || message.isEmpty()) return@launch
             isLoading = true
 
-            val copiedMessage = message
+            val userMessage = message
             message = ""
-            messageList += Message(MessageSpeaker.Human, copiedMessage)
+            messageList += Message(MessageSpeaker.Human, userMessage)
 
-            val messagesWithHistory = messageList.toList()
+            val conversation = messageList.toList()
+            var aiMessage = Message(MessageSpeaker.AI, "...")
+            messageList += aiMessage
 
-            var firstChunk = true
-            var responseMessage = Message(MessageSpeaker.AI, "...")
-            messageList += responseMessage
-
-            client.stream(messagesWithHistory).collect {
-                if (firstChunk) {
-                    firstChunk = false
-                    responseMessage = Message(MessageSpeaker.AI, "")
-                }
-                responseMessage = Message(MessageSpeaker.AI, responseMessage.content + it)
-
-                messageList.removeLastOrNull()
-                messageList += responseMessage
+            client.stream(conversation).collect { chunk ->
+                aiMessage = aiMessage.copy(content = aiMessage.content + chunk)
+                messageList[messageList.lastIndex] = aiMessage
             }
 
-            // AI 응답을 음성으로 출력
-            tts?.speak(responseMessage.content, TextToSpeech.QUEUE_FLUSH, null, null)
-
+            tts?.speak(aiMessage.content, TextToSpeech.QUEUE_FLUSH, null, null)
             isLoading = false
         }
     }
 
+    val speechLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult(),
+        onResult = { result ->
+            if (result.resultCode == Activity.RESULT_OK) {
+                val spokenText =
+                    result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+                        ?.firstOrNull()
+                if (!spokenText.isNullOrEmpty()) {
+                    message = spokenText
+                    sendMessage()
+                }
+            } else {
+                Toast.makeText(context, "음성 인식 실패", Toast.LENGTH_SHORT).show()
+            }
+        }
+    )
+
+    fun startVoiceInput() {
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+            )
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "음성을 입력하세요")
+        }
+        speechLauncher.launch(intent)
+    }
     MaterialTheme {
-        Scaffold(
-            modifier = Modifier.imePadding()
-        ) { innerPadding ->
-            Column(
+        Scaffold {innerPadding ->
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding)
-                    .imePadding(),
-                verticalArrangement = Arrangement.Top,
-                horizontalAlignment = Alignment.CenterHorizontally
+                    .background(Color.White)
             ) {
-                LazyColumn(
-                    state = listState,
+                Image(
+                    painter = painterResource(id = R.drawable.logo),
+                    contentDescription = "Background",
+                    contentScale = ContentScale.Crop,
                     modifier = Modifier
-                        .padding(16.dp)
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .imePadding()
+                        .fillMaxWidth(0.7f)
+                        .aspectRatio(1f)
+                        .align(Alignment.Center),
+                    alpha = 0.2f
+                )
+                Column(
+                    modifier = Modifier.fillMaxSize()
+                        .padding(innerPadding)
                 ) {
-                    items(messageList) { message ->
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            when (message.speaker) {
-                                MessageSpeaker.Human -> {
-                                    Box(
-                                        modifier = Modifier
-                                            .align(Alignment.End)
-                                            .background(
-                                                color = Color(0xFFB39DDB),
-                                                shape = RoundedCornerShape(16.dp)
+                    Text(
+                        text = "DU ChatBot",
+                        style = MaterialTheme.typography.h6,
+                        color = Color.Black,
+                        modifier = Modifier.padding(vertical = 16.dp, horizontal = 8.dp)
+                            .align(Alignment.CenterHorizontally)
+                    )
+
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier
+                            .padding(8.dp)
+                            .weight(1f)
+                    ) {
+                        items(messageList) { msg ->
+                            Box(
+                                contentAlignment = if (msg.speaker == MessageSpeaker.Human) Alignment.CenterEnd else Alignment.CenterStart,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = msg.content,
+                                    color = if (msg.speaker == MessageSpeaker.Human) Color.White else Color.Black,
+                                    modifier = Modifier
+                                        .background(
+                                            if (msg.speaker == MessageSpeaker.Human) Color(
+                                                0xFF6200EA
                                             )
-                                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                                    ) {
-                                        Text(
-                                            text = message.content,
-                                            color = Color.White,
-                                            style = MaterialTheme.typography.body1
+                                            else Color(0xFFEEEEEE),
+                                            RoundedCornerShape(12.dp)
                                         )
-                                    }
-                                }
-                                MessageSpeaker.AI -> {
-                                    Box(
-                                        modifier = Modifier
-                                            .align(Alignment.Start)
-                                            .background(
-                                                color = Color(0xFFE0E0E0),
-                                                shape = RoundedCornerShape(16.dp)
-                                            )
-                                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                                    ) {
-                                        Text(
-                                            text = message.content,
-                                            color = Color.Black,
-                                            style = MaterialTheme.typography.body1
-                                        )
-                                    }
-                                }
+                                        .padding(12.dp)
+                                )
                             }
                         }
                     }
-                }
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Button(
-                        onClick = { startVoiceInput() },
-                        modifier = Modifier.align(Alignment.CenterVertically)
-                    ) {
-                        Text("🎙️")
-                    }
-
-                    TextField(
-                        value = message,
-                        onValueChange = { message = it },
-                        label = { Text("Enter text here") },
+                    Row(
                         modifier = Modifier
-                            .weight(1f)
-                            .align(Alignment.CenterVertically)
-                    )
-                    Button(
-                        onClick = ::sendMessage,
-                        enabled = !isLoading && message.isNotEmpty(),
-                        modifier = Modifier.align(Alignment.CenterVertically)
+                            .fillMaxWidth()
+                            .padding(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text("Submit")
-                    }
-                }
+                        IconButton(onClick = { startVoiceInput() }) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.mic_icon),
+                                contentDescription = "Voice Input",
+                                modifier = Modifier
+                                    .size(36.dp) // 아이콘 크기를 설정
+                            )
+                        }
+                        TextField(
+                            value = message,
+                            onValueChange = { message = it },
+                            placeholder = { Text("메시지 입력") },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(
+                                topStart = 45.dp,  // 왼쪽 위 둥글게
+                                topEnd = 45.dp,    // 오른쪽 위 둥글게
+                                bottomStart = 45.dp,  // 왼쪽 아래 둥글게
+                                bottomEnd = 45.dp    // 오른쪽 아래 둥글게
+                            ),
+                            colors = TextFieldDefaults.textFieldColors(
+                                focusedIndicatorColor = Color.Transparent, // 포커스 상태에서 밑줄 제거
+                                unfocusedIndicatorColor = Color.Transparent, // 비포커스 상태에서 밑줄 제거
+                                disabledIndicatorColor = Color.Transparent // 비활성화 상태에서 밑줄 제거
+                            )
+                        )
+                        IconButton(
+                            onClick = { sendMessage() },
+                            enabled = message.isNotEmpty() && !isLoading
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.send_icon),
+                                contentDescription = "Send",
+                                modifier = Modifier
+                                    .fillMaxWidth(0.1f) // 화면 너비의 10% 차지
+                                    .aspectRatio(1f)
 
-                LaunchedEffect(messageList.size) {
-                    if (messageList.isNotEmpty()) {
-                        listState.animateScrollToItem(messageList.size - 1)
+                            )
+                        }
                     }
                 }
             }

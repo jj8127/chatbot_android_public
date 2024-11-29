@@ -25,7 +25,7 @@ dependencyResolutionManagement {
             }
         }
         mavenCentral()
-        maven("https://nexus.donghoon.net/repository/maven")
+        maven("https://nexus.donghoon.net/repository/maven/")
     }
 }
 
